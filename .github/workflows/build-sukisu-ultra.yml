@@ -1,4 +1,4 @@
-name: Build Kernel with SukiSU-Ultra (vayu) using GCC
+name: Build Kernel with ReSukiSU + KPM (vayu)
 on:
   workflow_dispatch:
 
@@ -6,37 +6,87 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Install dependencies (GCC 9)
+        run: |
+          sudo apt update
+          sudo apt install -y device-tree-compiler lz4 bc bison flex libssl-dev libelf-dev gcc-9-aarch64-linux-gnu
+          sudo update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9 100
+          sudo update-alternatives --set aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9
+
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          repository: RUOK488/android_kernel_vayu
+          ref: 16
+          path: kernel
 
-      - name: Install build dependencies
+      - name: Patch compiler_types.h (fix __has_attribute)
         run: |
-          sudo apt update
-          sudo apt install -y device-tree-compiler lz4 bc bison flex libssl-dev libelf-dev gcc-aarch64-linux-gnu
+          cd kernel
+          echo '#ifndef __has_attribute' > include/linux/compiler_types.h.new
+          echo '#define __has_attribute(x) 0' >> include/linux/compiler_types.h.new
+          echo '#endif' >> include/linux/compiler_types.h.new
+          cat include/linux/compiler_types.h >> include/linux/compiler_types.h.new
+          mv include/linux/compiler_types.h.new include/linux/compiler_types.h
 
-      - name: Integrate SukiSU-Ultra (with SUSFS)
+      - name: Remove broken touchscreen driver
         run: |
+          cd kernel
+          rm -f drivers/input/touchscreen/spi-xiaomi-tp.c
+          sed -i '/spi-xiaomi-tp/d' drivers/input/touchscreen/Makefile 2>/dev/null || true
+          sed -i 's/^CONFIG_SPI_XIAOMI_TP=y/# CONFIG_SPI_XIAOMI_TP is not set/' arch/arm64/configs/vayu_defconfig
+          echo "# CONFIG_SPI_XIAOMI_TP is not set" >> arch/arm64/configs/vayu_defconfig
+
+      - name: Add set_memory.h stub (for KPM on 4.14)
+        run: |
+          cd kernel
+          cat > include/linux/set_memory.h << 'EOF'
+          #ifndef _LINUX_SET_MEMORY_H
+          #define _LINUX_SET_MEMORY_H
+
+          #ifdef CONFIG_ARCH_HAS_SET_MEMORY
+          #include <asm/set_memory.h>
+          #else
+          static inline int set_memory_ro(unsigned long addr, int numpages) { return 0; }
+          static inline int set_memory_rw(unsigned long addr, int numpages) { return 0; }
+          static inline int set_memory_x(unsigned long addr, int numpages) { return 0; }
+          static inline int set_memory_nx(unsigned long addr, int numpages) { return 0; }
+          #endif
+
+          #endif /* _LINUX_SET_MEMORY_H */
+          EOF
+
+      - name: Ensure KPM is enabled and manual hook disabled
+        run: |
+          cd kernel
+          # These should already be set, but enforce them
+          sed -i 's/^# CONFIG_KPM is not set/CONFIG_KPM=y/' arch/arm64/configs/vayu_defconfig 2>/dev/null || echo "CONFIG_KPM=y" >> arch/arm64/configs/vayu_defconfig
+          sed -i 's/^CONFIG_KSU_MANUAL_HOOK=y/# CONFIG_KSU_MANUAL_HOOK is not set/' arch/arm64/configs/vayu_defconfig
+          echo "# CONFIG_KSU_MANUAL_HOOK is not set" >> arch/arm64/configs/vayu_defconfig
+
+      - name: Integrate ReSukiSU (builtin method) + SUSFS
+        working-directory: ./kernel
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
 
-      - name: Configure kernel (vayu_defconfig)
-        run: |
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vayu_defconfig
+      - name: Configure kernel
+        working-directory: ./kernel
+        run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vayu_defconfig
 
-      - name: Build kernel image
-        run: |
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image.gz-dtb
+      - name: Build kernel
+        working-directory: ./kernel
+        run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image.gz-dtb
 
-      - name: Prepare AnyKernel3 package
+      - name: Package with AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-          cp arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cp kernel/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           cd AnyKernel3
-          zip -r9 ../SukiSU-Ultra_vayu_$(date +%Y%m%d_%H%M%S).zip * -x .git README.md
+          zip -r9 ../ReSukiSU_KPM_vayu_$(date +%Y%m%d_%H%M%S).zip *
 
       - name: Upload flashable kernel
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU-Ultra_vayu_Kernel
-          path: SukiSU-Ultra_vayu_*.zip
+          name: ReSukiSU_KPM_vayu_Kernel
+          path: ReSukiSU_KPM_vayu_*.zip
