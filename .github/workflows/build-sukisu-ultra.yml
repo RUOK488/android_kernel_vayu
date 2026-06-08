@@ -1,0 +1,54 @@
+name: Build Kernel with SukiSU-Ultra (vayu)
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y device-tree-compiler lz4 bc bison flex libssl-dev libelf-dev
+
+      - name: Setup Clang toolchain (Proton-Clang)
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+          echo "$PWD/clang/bin" >> $GITHUB_PATH
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LD=ld.lld" >> $GITHUB_ENV
+          echo "AR=llvm-ar" >> $GITHUB_ENV
+          echo "NM=llvm-nm" >> $GITHUB_ENV
+          echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
+
+      - name: Integrate SukiSU-Ultra (with SUSFS)
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+
+      - name: Configure kernel (vayu_defconfig)
+        run: |
+          make ARCH=arm64 vayu_defconfig
+
+      - name: Build kernel image
+        run: |
+          make ARCH=arm64 -j$(nproc) Image.gz-dtb
+
+      - name: Prepare AnyKernel3 package
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+          cp arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          zip -r9 ../SukiSU-Ultra_vayu_$(date +%Y%m%d_%H%M%S).zip * -x .git README.md
+
+      - name: Upload flashable kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-Ultra_vayu_Kernel
+          path: SukiSU-Ultra_vayu_*.zip
