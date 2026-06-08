@@ -2,8 +2,11 @@
 VERSION = 4
 PATCHLEVEL = 14
 SUBLEVEL = 357
-EXTRAVERSION = -openela
+EXTRAVERSION = +8
 NAME = Petit Gorille
+
+# Force SELinux enforcing at boot
+CMDLINE += androidboot.selinux=enforcing
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
@@ -111,7 +114,7 @@ export quiet Q KBUILD_VERBOSE
 #
 # 2) Set KBUILD_OUTPUT
 # Set the environment variable KBUILD_OUTPUT to point to the directory
-# where the output files shall be placed.
+# where the output files shall be stored.
 # export KBUILD_OUTPUT=dir/to/store/output/files/
 # make
 #
